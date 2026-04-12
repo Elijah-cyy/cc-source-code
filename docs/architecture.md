@@ -1,224 +1,224 @@
-# Architecture
+# 架构
 
-> Deep-dive into how Claude Code is structured internally.
-
----
-
-## High-Level Overview
-
-Claude Code is a terminal-native AI coding assistant built as a single-binary CLI. The architecture follows a pipeline model:
-
-```
-User Input → CLI Parser → Query Engine → LLM API → Tool Execution Loop → Terminal UI
-```
-
-The entire UI layer is built with **React + Ink** (React for the terminal), making it a fully reactive CLI application with components, hooks, state management, and all the patterns you'd expect in a React web app — just rendered to the terminal.
+> 深入解析 Claude Code 的内部结构。
 
 ---
 
-## Core Pipeline
+## 概览
 
-### 1. Entrypoint (`src/main.tsx`)
+Claude Code 是一个面向终端的原生 AI 编程助手，以**单二进制 CLI** 形式交付。架构采用流水线模型：
 
-The CLI parser is built with [Commander.js](https://github.com/tj/commander.js) (`@commander-js/extra-typings`). On startup, it:
+```
+用户输入 → CLI 解析器 → 查询引擎 → LLM API → 工具执行循环 → 终端 UI
+```
 
-- Fires parallel prefetch side-effects (MDM settings, Keychain, API preconnect) before heavy module imports
-- Parses CLI arguments and flags
-- Initializes the React/Ink renderer
-- Hands off to the REPL launcher (`src/replLauncher.tsx`)
+整个 UI 层基于 **React + Ink**（面向终端的 React）构建，因此它是一个完整的响应式 CLI 应用：组件、钩子、状态管理，以及你在 React Web 应用中熟悉的各种模式——只是渲染目标换成了终端。
 
-### 2. Initialization (`src/entrypoints/`)
+---
 
-| File | Role |
+## 核心流水线
+
+### 1. 入口（`src/main.tsx`）
+
+CLI 解析器使用 [Commander.js](https://github.com/tj/commander.js)（`@commander-js/extra-typings`）构建。启动时会：
+
+- 在加载较重模块之前，并行触发预取副作用（MDM 设置、钥匙串、API 预连接）
+- 解析 CLI 参数与标志
+- 初始化 React/Ink 渲染器
+- 交给 REPL 启动器（`src/replLauncher.tsx`）
+
+### 2. 初始化（`src/entrypoints/`）
+
+| 文件 | 作用 |
 |------|------|
-| `cli.tsx` | CLI session orchestration — the main path from launch to REPL |
-| `init.ts` | Config, telemetry, OAuth, MDM policy initialization |
-| `mcp.ts` | MCP server mode entrypoint (Claude Code as an MCP server) |
-| `sdk/` | Agent SDK — programmatic API for embedding Claude Code |
+| `cli.tsx` | CLI 会话编排——从启动到 REPL 的主路径 |
+| `init.ts` | 配置、遥测、OAuth、MDM 策略初始化 |
+| `mcp.ts` | MCP 服务端模式入口（Claude Code 作为 MCP 服务端） |
+| `sdk/` | Agent SDK——用于嵌入 Claude Code 的程序化 API |
 
-Startup performs parallel initialization: MDM policy reads, Keychain prefetch, feature flag checks, then core init.
+启动时会并行初始化：读取 MDM 策略、预取钥匙串、检查功能开关，然后执行核心初始化。
 
-### 3. Query Engine (`src/QueryEngine.ts`, ~46K lines)
+### 3. 查询引擎（`src/QueryEngine.ts`，约 4.6 万行）
 
-The heart of Claude Code. Handles:
+Claude Code 的核心。负责：
 
-- **Streaming responses** from the Anthropic API
-- **Tool-call loops** — when the LLM requests a tool, execute it and feed the result back
-- **Thinking mode** — extended thinking with budget management
-- **Retry logic** — automatic retries with backoff for transient failures
-- **Token counting** — tracks input/output tokens and cost per turn
-- **Context management** — manages conversation history and context windows
+- **流式响应**：来自 Anthropic API
+- **工具调用循环**：当 LLM 请求工具时执行，并将结果回传
+- **思考模式**：扩展思考与预算管理
+- **重试逻辑**：对瞬时失败自动退避重试
+- **Token 计数**：跟踪每轮输入/输出 token 与成本
+- **上下文管理**：管理对话历史与上下文窗口
 
-### 4. Tool System (`src/Tool.ts` + `src/tools/`)
+### 4. 工具系统（`src/Tool.ts` + `src/tools/`）
 
-Every capability Claude can invoke is a **tool**. Each tool is self-contained with:
+Claude 能调用的每一项能力都是一个**工具**。每个工具自包含：
 
-- **Input schema** (Zod validation)
-- **Permission model** (what needs user approval)
-- **Execution logic** (the actual implementation)
-- **UI components** (how invocation/results render in the terminal)
+- **输入模式**（Zod 校验）
+- **权限模型**（哪些需要用户批准）
+- **执行逻辑**（实际实现）
+- **UI 组件**（调用与结果在终端中的展示方式）
 
-Tools are registered in `src/tools.ts` and discovered by the Query Engine during tool-call loops.
+工具在 `src/tools.ts` 中注册，由查询引擎在工具调用循环中发现。
 
-See [Tools Reference](tools.md) for the complete catalog.
+完整目录见 [工具参考](tools.md)。
 
-### 5. Command System (`src/commands.ts` + `src/commands/`)
+### 5. 命令系统（`src/commands.ts` + `src/commands/`）
 
-User-facing slash commands (`/commit`, `/review`, `/mcp`, etc.) that can be typed in the REPL. Three types:
+面向用户的斜杠命令（`/commit`、`/review`、`/mcp` 等），可在 REPL 中输入。共三类：
 
-| Type | Description | Example |
-|------|-------------|---------|
-| **PromptCommand** | Sends a formatted prompt to the LLM with injected tools | `/review`, `/commit` |
-| **LocalCommand** | Runs in-process, returns plain text | `/cost`, `/version` |
-| **LocalJSXCommand** | Runs in-process, returns React JSX | `/doctor`, `/install` |
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| **PromptCommand** | 向 LLM 发送带注入工具的格式化提示 | `/review`、`/commit` |
+| **LocalCommand** | 进程内执行，返回纯文本 | `/cost`、`/version` |
+| **LocalJSXCommand** | 进程内执行，返回 React JSX | `/doctor`、`/install` |
 
-Commands are registered in `src/commands.ts` and invoked via `/command-name` in the REPL.
+命令在 `src/commands.ts` 中注册，在 REPL 中通过 `/command-name` 调用。
 
-See [Commands Reference](commands.md) for the complete catalog.
-
----
-
-## State Management
-
-Claude Code uses a **React context + custom store** pattern:
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| `AppState` | `src/state/AppStateStore.ts` | Global mutable state object |
-| Context Providers | `src/context/` | React context for notifications, stats, FPS |
-| Selectors | `src/state/` | Derived state functions |
-| Change Observers | `src/state/onChangeAppState.ts` | Side-effects on state changes |
-
-The `AppState` object is passed into tool contexts, giving tools access to conversation history, settings, and runtime state.
+完整目录见 [命令参考](commands.md)。
 
 ---
 
-## UI Layer
+## 状态管理
 
-### Components (`src/components/`, ~140 components)
+Claude Code 采用 **React Context + 自定义 store** 模式：
 
-- Functional React components using Ink primitives (`Box`, `Text`, `useInput()`)
-- Styled with [Chalk](https://github.com/chalk/chalk) for terminal colors
-- React Compiler enabled for optimized re-renders
-- Design system primitives in `src/components/design-system/`
+| 组件 | 位置 | 用途 |
+|------|------|------|
+| `AppState` | `src/state/AppStateStore.ts` | 全局可变状态对象 |
+| Context 提供者 | `src/context/` | 通知、统计、FPS 等的 React Context |
+| 选择器 | `src/state/` | 派生状态函数 |
+| 变更观察者 | `src/state/onChangeAppState.ts` | 状态变更时的副作用 |
 
-### Screens (`src/screens/`)
-
-Full-screen UI modes:
-
-| Screen | Purpose |
-|--------|---------|
-| `REPL.tsx` | Main interactive REPL (the default screen) |
-| `Doctor.tsx` | Environment diagnostics (`/doctor`) |
-| `ResumeConversation.tsx` | Session restore (`/resume`) |
-
-### Hooks (`src/hooks/`, ~80 hooks)
-
-Standard React hooks pattern. Notable categories:
-
-- **Permission hooks** — `useCanUseTool`, `src/hooks/toolPermission/`
-- **IDE integration** — `useIDEIntegration`, `useIdeConnectionStatus`, `useDiffInIDE`
-- **Input handling** — `useTextInput`, `useVimInput`, `usePasteHandler`, `useInputBuffer`
-- **Session management** — `useSessionBackgrounding`, `useRemoteSession`, `useAssistantHistory`
-- **Plugin/skill hooks** — `useManagePlugins`, `useSkillsChange`
-- **Notification hooks** — `src/hooks/notifs/` (rate limits, deprecation warnings, etc.)
+`AppState` 对象会传入工具上下文，使工具能访问对话历史、设置与运行时状态。
 
 ---
 
-## Configuration & Schemas
+## UI 层
 
-### Config Schemas (`src/schemas/`)
+### 组件（`src/components/`，约 140 个组件）
 
-Zod v4-based schemas for all configuration:
+- 使用 Ink 原语（`Box`、`Text`、`useInput()`）的函数式 React 组件
+- 使用 [Chalk](https://github.com/chalk/chalk) 做终端配色
+- 启用 React Compiler 以优化重渲染
+- 设计系统原语位于 `src/components/design-system/`
 
-- User settings
-- Project-level settings
-- Organization/enterprise policies
-- Permission rules
+### 屏幕（`src/screens/`）
 
-### Migrations (`src/migrations/`)
+全屏 UI 模式：
 
-Handles config format changes between versions — reads old configs and transforms them to the current schema.
+| 屏幕 | 用途 |
+|------|------|
+| `REPL.tsx` | 主交互式 REPL（默认屏幕） |
+| `Doctor.tsx` | 环境诊断（`/doctor`） |
+| `ResumeConversation.tsx` | 会话恢复（`/resume`） |
+
+### 钩子（`src/hooks/`，约 80 个）
+
+标准 React 钩子模式。主要类别包括：
+
+- **权限钩子** — `useCanUseTool`、`src/hooks/toolPermission/`
+- **IDE 集成** — `useIDEIntegration`、`useIdeConnectionStatus`、`useDiffInIDE`
+- **输入处理** — `useTextInput`、`useVimInput`、`usePasteHandler`、`useInputBuffer`
+- **会话管理** — `useSessionBackgrounding`、`useRemoteSession`、`useAssistantHistory`
+- **插件/技能钩子** — `useManagePlugins`、`useSkillsChange`
+- **通知钩子** — `src/hooks/notifs/`（速率限制、弃用警告等）
 
 ---
 
-## Build System
+## 配置与模式
 
-### Bun Runtime
+### 配置模式（`src/schemas/`）
 
-Claude Code runs on [Bun](https://bun.sh) (not Node.js). Key implications:
+基于 Zod v4 的各类配置模式：
 
-- Native JSX/TSX support without a transpilation step
-- `bun:bundle` feature flags for dead-code elimination
-- ES modules with `.js` extensions (Bun convention)
+- 用户设置
+- 项目级设置
+- 组织/企业策略
+- 权限规则
 
-### Feature Flags (Dead Code Elimination)
+### 迁移（`src/migrations/`）
+
+处理版本间的配置格式变更——读取旧配置并转换为当前模式。
+
+---
+
+## 构建系统
+
+### Bun 运行时
+
+Claude Code 运行在 [Bun](https://bun.sh) 上（而非 Node.js）。主要影响：
+
+- 原生 JSX/TSX 支持，无需单独转译步骤
+- `bun:bundle` 功能开关用于死代码消除
+- ES 模块使用 `.js` 扩展名（Bun 约定）
+
+### 功能开关（死代码消除）
 
 ```typescript
 import { feature } from 'bun:bundle'
 
-// Code inside inactive feature flags is completely stripped at build time
+// 未激活的功能开关内的代码会在构建时被完全剔除
 if (feature('VOICE_MODE')) {
   const voiceCommand = require('./commands/voice/index.js').default
 }
 ```
 
-Notable flags:
+值得关注的开关：
 
-| Flag | Feature |
-|------|---------|
-| `PROACTIVE` | Proactive agent mode (autonomous actions) |
-| `KAIROS` | Kairos subsystem |
-| `BRIDGE_MODE` | IDE bridge integration |
-| `DAEMON` | Background daemon mode |
-| `VOICE_MODE` | Voice input/output |
-| `AGENT_TRIGGERS` | Triggered agent actions |
-| `MONITOR_TOOL` | Monitoring tool |
-| `COORDINATOR_MODE` | Multi-agent coordinator |
-| `WORKFLOW_SCRIPTS` | Workflow automation scripts |
+| 开关 | 功能 |
+|------|------|
+| `PROACTIVE` | 主动式智能体模式（自主操作） |
+| `KAIROS` | Kairos 子系统 |
+| `BRIDGE_MODE` | IDE 桥接集成 |
+| `DAEMON` | 后台守护进程模式 |
+| `VOICE_MODE` | 语音输入/输出 |
+| `AGENT_TRIGGERS` | 触发型智能体动作 |
+| `MONITOR_TOOL` | 监控工具 |
+| `COORDINATOR_MODE` | 多智能体协调器 |
+| `WORKFLOW_SCRIPTS` | 工作流自动化脚本 |
 
-### Lazy Loading
+### 懒加载
 
-Heavy modules are deferred via dynamic `import()` until first use:
+较重模块通过动态 `import()` 延迟到首次使用时再加载：
 
-- OpenTelemetry (~400KB)
-- gRPC (~700KB)
-- Other optional dependencies
-
----
-
-## Error Handling & Telemetry
-
-### Telemetry (`src/services/analytics/`)
-
-- [GrowthBook](https://www.growthbook.io/) for feature flags and A/B testing
-- [OpenTelemetry](https://opentelemetry.io/) for distributed tracing and metrics
-- Custom event tracking for usage analytics
-
-### Cost Tracking (`src/cost-tracker.ts`)
-
-Tracks token usage and estimated cost per conversation turn. Accessible via the `/cost` command.
-
-### Diagnostics (`/doctor` command)
-
-The `Doctor.tsx` screen runs environment checks: API connectivity, authentication, tool availability, MCP server status, and more.
+- OpenTelemetry（约 400KB）
+- gRPC（约 700KB）
+- 其他可选依赖
 
 ---
 
-## Concurrency Model
+## 错误处理与遥测
 
-Claude Code uses a **single-threaded event loop** (Bun/Node.js model) with:
+### 遥测（`src/services/analytics/`）
 
-- Async/await for I/O operations
-- React's concurrent rendering for UI updates
-- Web Workers or child processes for CPU-intensive tasks (gRPC, etc.)
-- Tool concurrency safety — each tool declares `isConcurrencySafe()` to indicate if it can run in parallel with other tools
+- [GrowthBook](https://www.growthbook.io/)：功能开关与 A/B 测试
+- [OpenTelemetry](https://opentelemetry.io/)：分布式追踪与指标
+- 自定义事件：用于使用分析
+
+### 成本追踪（`src/cost-tracker.ts`）
+
+跟踪每轮对话的 token 用量与估算费用。可通过 `/cost` 命令查看。
+
+### 诊断（`/doctor` 命令）
+
+`Doctor.tsx` 屏幕会运行环境检查：API 连通性、认证、工具可用性、MCP 服务端状态等。
 
 ---
 
-## See Also
+## 并发模型
 
-- [Tools Reference](tools.md) — Complete catalog of all 40 agent tools
-- [Commands Reference](commands.md) — Complete catalog of all slash commands
-- [Subsystems Guide](subsystems.md) — Bridge, MCP, permissions, skills, plugins, and more
-- [Exploration Guide](exploration-guide.md) — How to navigate this codebase
+Claude Code 使用 **单线程事件循环**（Bun/Node.js 模型），配合：
+
+- 异步/await 处理 I/O
+- React 并发渲染更新 UI
+- Web Worker 或子进程处理 CPU 密集型任务（gRPC 等）
+- 工具并发安全——每个工具声明 `isConcurrencySafe()`，表示是否可与其他工具并行运行
+
+---
+
+## 另见
+
+- [工具参考](tools.md) — 全部 40 个智能体工具的完整目录
+- [命令参考](commands.md) — 全部斜杠命令的完整目录
+- [子系统指南](subsystems.md) — 桥接、MCP、权限、技能、插件等
+- [探索指南](exploration-guide.md) — 如何浏览本代码库
